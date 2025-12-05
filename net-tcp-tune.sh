@@ -4041,15 +4041,36 @@ install_xanmod_kernel() {
     # ARM 架构特殊处理
     if [ "$cpu_arch" = "aarch64" ]; then
         echo -e "${gl_kjlan}检测到 ARM64 架构，使用专用安装脚本${gl_bai}"
+        echo ""
 
-        install_package curl coreutils || return 1
+        # 增强的依赖检查：即使apt update失败，只要curl已存在就继续
+        echo -e "${gl_zi}[步骤 1/5] 检查依赖工具...${gl_bai}"
+        install_package curl coreutils || command -v curl >/dev/null 2>&1 || {
+            echo -e "${gl_hong}错误: 无法安装或找到 curl 工具${gl_bai}"
+            echo -e "${gl_huang}原因分析:${gl_bai}"
+            echo "  1. apt源配置可能有问题，尝试手动执行: apt-get update"
+            echo "  2. 网络连接可能异常，检查DNS和网络连通性"
+            echo "  3. 磁盘空间可能不足，检查: df -h"
+            echo ""
+            echo -e "${gl_huang}建议操作:${gl_bai}"
+            echo "  手动安装curl: apt-get install -y curl"
+            echo "  然后重新运行本脚本"
+            return 1
+        }
+        echo -e "${gl_lv}✓ 依赖检查通过${gl_bai}"
+        echo ""
 
+        # 创建临时目录
+        echo -e "${gl_zi}[步骤 2/5] 准备下载环境...${gl_bai}"
         local tmp_dir
         tmp_dir=$(mktemp -d 2>/dev/null)
         if [ -z "$tmp_dir" ]; then
             echo -e "${gl_hong}错误: 无法创建临时目录用于下载 ARM64 脚本${gl_bai}"
+            echo -e "${gl_huang}可能原因: /tmp 目录权限问题或磁盘已满${gl_bai}"
             return 1
         fi
+        echo -e "${gl_lv}✓ 临时目录: ${tmp_dir}${gl_bai}"
+        echo ""
 
         local script_url="https://jhb.ovh/jb/bbrv3arm.sh"
         local sha256_url="${script_url}.sha256"
@@ -4058,32 +4079,49 @@ install_xanmod_kernel() {
         local sha256_path="${tmp_dir}/bbrv3arm.sh.sha256"
         local sha512_path="${tmp_dir}/bbrv3arm.sh.sha512"
 
-        echo "日志: 正在下载 ARM64 安装脚本到临时目录 ${tmp_dir}"
-
-        if ! curl -fsSL "$script_url" -o "$script_path"; then
+        # 下载ARM脚本
+        echo -e "${gl_zi}[步骤 3/5] 下载 ARM64 安装脚本...${gl_bai}"
+        if ! curl -fsSL "$script_url" -o "$script_path" --connect-timeout 10 --max-time 30; then
             echo -e "${gl_hong}错误: ARM64 安装脚本下载失败${gl_bai}"
+            echo -e "${gl_huang}可能原因:${gl_bai}"
+            echo "  1. 网络连接问题（DNS解析失败或无法访问 jhb.ovh）"
+            echo "  2. 防火墙阻止了HTTPS连接"
+            echo "  3. 服务器 jhb.ovh 暂时不可用"
+            echo ""
+            echo -e "${gl_huang}建议操作:${gl_bai}"
+            echo "  测试网络: curl -I https://jhb.ovh"
+            echo "  检查DNS: nslookup jhb.ovh"
             rm -rf "$tmp_dir"
             return 1
         fi
+        echo -e "${gl_lv}✓ 脚本下载完成${gl_bai}"
 
-        if ! curl -fsSL "$sha256_url" -o "$sha256_path"; then
+        # 下载校验文件
+        if ! curl -fsSL "$sha256_url" -o "$sha256_path" --connect-timeout 10 --max-time 30; then
             echo -e "${gl_hong}错误: 未能获取发布方提供的 SHA256 校验文件${gl_bai}"
+            echo -e "${gl_huang}可能原因: 网络连接中断或校验文件不存在${gl_bai}"
             rm -rf "$tmp_dir"
             return 1
         fi
 
-        if ! curl -fsSL "$sha512_url" -o "$sha512_path"; then
+        if ! curl -fsSL "$sha512_url" -o "$sha512_path" --connect-timeout 10 --max-time 30; then
             echo -e "${gl_hong}错误: 未能获取发布方提供的 SHA512 校验文件${gl_bai}"
+            echo -e "${gl_huang}可能原因: 网络连接中断或校验文件不存在${gl_bai}"
             rm -rf "$tmp_dir"
             return 1
         fi
+        echo -e "${gl_lv}✓ 校验文件下载完成${gl_bai}"
+        echo ""
 
+        # 验证校验和
+        echo -e "${gl_zi}[步骤 4/5] 验证脚本完整性...${gl_bai}"
         local expected_sha256 expected_sha512 actual_sha256 actual_sha512
         expected_sha256=$(awk 'NR==1 {print $1}' "$sha256_path")
         expected_sha512=$(awk 'NR==1 {print $1}' "$sha512_path")
 
         if [ -z "$expected_sha256" ] || [ -z "$expected_sha512" ]; then
             echo -e "${gl_hong}错误: 校验文件内容无效${gl_bai}"
+            echo -e "${gl_huang}可能原因: 下载的校验文件被截断或损坏${gl_bai}"
             rm -rf "$tmp_dir"
             return 1
         fi
@@ -4093,28 +4131,63 @@ install_xanmod_kernel() {
 
         if [ "$expected_sha256" != "$actual_sha256" ]; then
             echo -e "${gl_hong}错误: SHA256 校验失败，已中止${gl_bai}"
+            echo -e "${gl_huang}可能原因: 脚本文件在传输过程中被篡改或损坏${gl_bai}"
+            echo "  期望值: $expected_sha256"
+            echo "  实际值: $actual_sha256"
             rm -rf "$tmp_dir"
             return 1
         fi
 
         if [ "$expected_sha512" != "$actual_sha512" ]; then
             echo -e "${gl_hong}错误: SHA512 校验失败，已中止${gl_bai}"
+            echo -e "${gl_huang}可能原因: 脚本文件在传输过程中被篡改或损坏${gl_bai}"
+            echo "  期望值: $expected_sha512"
+            echo "  实际值: $actual_sha512"
             rm -rf "$tmp_dir"
             return 1
         fi
 
-        echo -e "${gl_lv}SHA256 与 SHA512 校验通过${gl_bai}"
+        echo -e "${gl_lv}✓ SHA256 与 SHA512 校验通过${gl_bai}"
         echo -e "${gl_huang}安全提示:${gl_bai} ARM64 脚本已下载至 ${script_path}"
         echo "如需，您可在继续前使用 cat/less 等命令手动审查脚本内容。"
         read -s -r -p "审查完成后按 Enter 继续执行（Ctrl+C 取消）..." _
         echo ""
+        echo ""
 
+        # 执行ARM安装脚本
+        echo -e "${gl_zi}[步骤 5/5] 执行 ARM64 内核安装脚本...${gl_bai}"
+        echo -e "${gl_huang}提示: 脚本将显示菜单，请选择选项 1 安装 BBR v3${gl_bai}"
+        echo ""
+        
         if bash "$script_path"; then
             rm -rf "$tmp_dir"
-            echo -e "${gl_lv}ARM BBR v3 安装完成${gl_bai}"
+            echo ""
+            echo -e "${gl_lv}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${gl_bai}"
+            echo -e "${gl_lv}ARM BBR v3 安装完成！${gl_bai}"
+            echo -e "${gl_lv}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${gl_bai}"
             return 0
         else
-            echo -e "${gl_hong}安装失败${gl_bai}"
+            local exit_code=$?
+            echo ""
+            echo -e "${gl_hong}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${gl_bai}"
+            echo -e "${gl_hong}ARM 安装脚本执行失败 (退出码: $exit_code)${gl_bai}"
+            echo -e "${gl_hong}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${gl_bai}"
+            echo ""
+            echo -e "${gl_huang}可能的失败原因:${gl_bai}"
+            echo "  1. 【选项选择问题】- 未选择选项 1，或选择了其他选项后脚本正常结束"
+            echo "  2. 【网络下载失败】- 下载内核 deb 包时网络中断或 jhb.ovh 服务器不可达"
+            echo "     • 测试方法: wget https://jhb.ovh/jb/nh/linux-image-6.11.0+_6.11.0-g7542cc7c41c0-4_arm64.deb"
+            echo "  3. 【dpkg 安装失败】- 内核包安装时出错（依赖冲突、磁盘空间不足等）"
+            echo "     • 检查磁盘: df -h"
+            echo "     • 检查依赖: dpkg -l | grep linux-image"
+            echo "  4. 【权限问题】- 非root用户执行或sudo配置问题"
+            echo "  5. 【系统不兼容】- 当前ARM系统版本不支持该内核"
+            echo ""
+            echo -e "${gl_huang}诊断建议:${gl_bai}"
+            echo "  • 查看上方输出信息，寻找具体的错误提示"
+            echo "  • 手动执行脚本测试: bash $script_path"
+            echo "  • 检查系统日志: journalctl -xe"
+            echo ""
             rm -rf "$tmp_dir"
             return 1
         fi
